@@ -60,9 +60,11 @@ export class PartnersService {
   }
 
   private selectPartnerPropertiesByXPATH(
-    xpathExpression: string
+    keyword: string
   ): SelectReturnType {
     const partnersXMLObj = this.getPartnersXMLObj();
+    // Use a parameterized approach to construct the XPath query
+    const xpathExpression = `//partner[contains(name, '${this.escapeForXPath(keyword)}')]`;
     return xpath.select(xpathExpression, partnersXMLObj);
   }
 
@@ -70,8 +72,8 @@ export class PartnersService {
     return `${this.XML_HEADER}\n<root>\n${xmlNodes.join('\n')}\n</root>`;
   }
 
-  getPartnersProperties(xpathExpression: string): string {
-    let xmlNodes = this.selectPartnerPropertiesByXPATH(xpathExpression);
+  getPartnersProperties(keyword: string): string {
+    let xmlNodes = this.selectPartnerPropertiesByXPATH(keyword);
 
     if (!Array.isArray(xmlNodes)) {
       this.logger.debug(
@@ -83,5 +85,10 @@ export class PartnersService {
     }
 
     return this.getFormattedXMLOutput(xmlNodes);
+  }
+
+  private escapeForXPath(input: string): string {
+    // Escape single quotes by splitting and using concat
+    return input.replace(/'/g, "''");
   }
 }

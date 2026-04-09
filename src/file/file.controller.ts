@@ -38,6 +38,45 @@ import { CloudProvidersMetaData } from './cloud.providers.metadata';
 @ApiTags('Files controller')
 export class FileController {
   private readonly logger = new Logger(FileController.name);
+  private readonly allowedAwsMetadataPaths = new Set<string>([
+    'ami-id',
+    'ami-launch-index',
+    'ami-manifest-path',
+    'block-device-mapping/',
+    'events/',
+    'hostname',
+    'iam/',
+    'instance-action',
+    'instance-id',
+    'instance-life-cycle',
+    'instance-type',
+    'local-hostname',
+    'local-ipv4',
+    'mac',
+    'metrics/',
+    'network/',
+    'placement/',
+    'profile',
+    'public-hostname',
+    'public-ipv4',
+    'public-keys/',
+    'reservation-id',
+    'security-groups',
+    'services/'
+  ]);
+  private readonly allowedAzureMetadataPaths = new Set<string>([
+    '/compute',
+    '/network'
+  ]);
+  private readonly allowedGoogleMetadataPaths = new Set<string>([
+    'instance/',
+    'oslogin/',
+    'project/'
+  ]);
+  private readonly allowedDigitalOceanMetadataPaths = new Set<string>([
+    '/v1',
+    '/v1.json'
+  ]);
 
   constructor(private fileService: FileService) {}
 
@@ -49,12 +88,111 @@ export class FileController {
     }
   }
 
-  private async loadCPFile(cpBaseUrl: string, path: string) {
-    if (!path.startsWith(cpBaseUrl)) {
-      throw new BadRequestException(`Invalid paramater 'path' ${path}`);
+  private rejectHttpPath(filePath: string): void {
+    if (typeof filePath !== 'string' || !filePath) {
+      throw new BadRequestException(`Invalid paramater 'path' ${filePath}`);
     }
 
-    const file: Stream = await this.fileService.getFile(path);
+    if (filePath.startsWith('http://') || filePath.startsWith('https://')) {
+      throw new BadRequestException(`Invalid paramater 'path' ${filePath}`);
+    }
+  }
+
+  private validateAwsMetadataPath(filePath: string): string {
+    this.rejectHttpPath(filePath);
+
+    const prefix = CloudProvidersMetaData.AWS;
+    if (!filePath.startsWith(prefix)) {
+      throw new BadRequestException(`Invalid paramater 'path' ${filePath}`);
+    }
+
+    const metadataPath = filePath.substring(prefix.length);
+    const allowed = Array.from(this.allowedAwsMetadataPaths).some((allowedPath) =>
+      metadataPath === allowedPath || metadataPath.startsWith(allowedPath)
+    );
+
+    if (!allowed) {
+      throw new BadRequestException(`Invalid paramater 'path' ${filePath}`);
+    }
+
+    return filePath;
+  }
+
+  private validateAzureMetadataPath(filePath: string): string {
+    this.rejectHttpPath(filePath);
+
+    const prefix = CloudProvidersMetaData.AZURE;
+    if (!filePath.startsWith(prefix)) {
+      throw new BadRequestException(`Invalid paramater 'path' ${filePath}`);
+    }
+
+    const metadataPath = filePath.substring(prefix.length);
+    const allowed = Array.from(this.allowedAzureMetadataPaths).some((allowedPath) =>
+      metadataPath === allowedPath || metadataPath.startsWith(`${allowedPath}/`)
+    );
+
+    if (!allowed) {
+      throw new BadRequestException(`Invalid paramater 'path' ${filePath}`);
+    }
+
+    return filePath;
+  }
+
+  private validateGoogleMetadataPath(filePath: string): string {
+    this.rejectHttpPath(filePath);
+
+    const prefix = CloudProvidersMetaData.GOOGLE;
+    if (!filePath.startsWith(prefix)) {
+      throw new BadRequestException(`Invalid paramater 'path' ${filePath}`);
+    }
+
+    const metadataPath = filePath.substring(prefix.length);
+    const allowed = Array.from(this.allowedGoogleMetadataPaths).some((allowedPath) =>
+      metadataPath === allowedPath || metadataPath.startsWith(allowedPath)
+    );
+
+    if (!allowed) {
+      throw new BadRequestException(`Invalid paramater 'path' ${filePath}`);
+    }
+
+    return filePath;
+  }
+
+  private validateDigitalOceanMetadataPath(filePath: string): string {
+    this.rejectHttpPath(filePath);
+
+    if (
+      filePath !== CloudProvidersMetaData.DIGITAL_OCEAN &&
+      filePath !== CloudProvidersMetaData.DIGITAL_OCEAN_JSON
+    ) {
+      throw new BadRequestException(`Invalid paramater 'path' ${filePath}`);
+    }
+
+    const allowed = Array.from(this.allowedDigitalOceanMetadataPaths).some((allowedPath) =>
+      filePath.endsWith(allowedPath)
+    );
+
+    if (!allowed) {
+      throw new BadRequestException(`Invalid paramater 'path' ${filePath}`);
+    }
+
+    return filePath;
+  }
+
+  private async loadCPFile(cpBaseUrl: string, filePath: string) {
+    if (cpBaseUrl === CloudProvidersMetaData.AWS) {
+      filePath = this.validateAwsMetadataPath(filePath);
+    } else if (cpBaseUrl === CloudProvidersMetaData.AZURE) {
+      filePath = this.validateAzureMetadataPath(filePath);
+    } else if (cpBaseUrl === CloudProvidersMetaData.GOOGLE) {
+      filePath = this.validateGoogleMetadataPath(filePath);
+    } else if (cpBaseUrl === CloudProvidersMetaData.DIGITAL_OCEAN) {
+      filePath = this.validateDigitalOceanMetadataPath(filePath);
+    } else {
+      throw new BadRequestException(`Invalid paramater 'path' ${filePath}`);
+    }
+
+    const file: Stream = await this.fileService.getFile(filePath);
 
     return file;
   }

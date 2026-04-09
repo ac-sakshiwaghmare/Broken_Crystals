@@ -19,6 +19,8 @@ import { McpToolName } from './mcp.tool-registry';
 export interface McpToolExecutionContext {
   authorizationHeader?: string;
   onPartialOutput?: (chunk: McpToolPartialOutput) => void;
+  role?: 'user' | 'admin';
+  authenticated?: boolean;
 }
 
 export interface McpToolPartialOutput {
@@ -70,7 +72,8 @@ export class McpToolExecutorService extends McpProxySupport {
       case 'search_users':
         return this.executeSearchUsersTool(
           args as SearchUsersToolInput,
-          context.authorizationHeader
+          context.authorizationHeader,
+          context
         );
       case 'update_user':
         return this.executeUpdateUserTool(args as UpdateUserToolInput);
@@ -98,8 +101,9 @@ export class McpToolExecutorService extends McpProxySupport {
         return this.proxyError('get_count', response);
       }
 
-      const text =
-        typeof response.data === 'string'
+      const text:
+        | string
+        = typeof response.data === 'string'
           ? response.data.trim()
           : String(response.data);
 
@@ -354,13 +358,54 @@ export class McpToolExecutorService extends McpProxySupport {
 
   private async executeSearchUsersTool(
     input: SearchUsersToolInput,
-    authorizationHeader?: string
+    authorizationHeader?: string,
+    context: McpToolExecutionContext = {}
   ): Promise<McpToolResult> {
     try {
+      const isAdmin = context.role === 'admin';
+      const isAuthenticated = Boolean(authorizationHeader && context.authenticated !== false);
+
+      if (!isAuthenticated) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Unauthorized: access denied'
+            }
+          ],
+          isError: true
+        };
+      }
+
+      if (!isAdmin) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Forbidden: access denied'
+            }
+          ],
+          isError: true
+        };
+      }
+
+      const normalizedName = typeof input.name === 'string' ? input.name.trim() : '';
+      if (!normalizedName.length) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Invalid arguments'
+            }
+          ],
+          isError: true
+        };
+      }
+
       this.logger.debug('Proxy users search via /api/users/search/:name');
 
       const response = await axios.get(
-        this.endpoint(`/api/users/search/${encodeURIComponent(input.name)}`),
+        this.endpoint(`/api/users/search/${encodeURIComponent(normalizedName)}`),
         {
           headers: {
             ...this.buildProxyHeaders(authorizationHeader),
@@ -372,7 +417,15 @@ export class McpToolExecutorService extends McpProxySupport {
       );
 
       if (response.status !== 200) {
-        return this.proxyError('search_users', response);
+        return {
+          content: [
+            {
+              type: 'text',
+              text: 'Forbidden: access denied'
+            }
+          ],
+          isError: true
+        };
       }
 
       return {
@@ -385,7 +438,7 @@ export class McpToolExecutorService extends McpProxySupport {
       };
     } catch (error) {
       return {
-        content: [{ type: 'text', text: `Error: ${(error as Error).message}` }],
+        content: [{ type: 'text', text: 'Forbidden: access denied' }],
         isError: true
       };
     }

@@ -37,8 +37,19 @@ import { McpModule } from './mcp/mcp.module';
     HttpClientModule,
     GraphQLModule.forRoot<MercuriusDriverConfig>({
       driver: MercuriusDriver,
-      graphiql: true,
-      autoSchemaFile: true
+      graphiql: false, // Disable GraphiQL
+      autoSchemaFile: true,
+      introspection: false, // Disable introspection
+      context: ({ req }) => ({
+        headers: req.headers,
+        isAuthenticated: req.isAuthenticated && req.isAuthenticated(),
+      }),
+      formatResponse: (response, { context }) => {
+        if (!context.isAuthenticated) {
+          delete response.data.__schema;
+        }
+        return response;
+      },
     }),
     PartnersModule,
     EmailModule,

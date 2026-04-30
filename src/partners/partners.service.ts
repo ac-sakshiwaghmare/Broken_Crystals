@@ -63,11 +63,32 @@ export class PartnersService {
     xpathExpression: string
   ): SelectReturnType {
     const partnersXMLObj = this.getPartnersXMLObj();
+    // Sanitize the XPath expression to prevent injection
+    if (!this.isValidXPath(xpathExpression)) {
+      this.logger.error('Invalid XPath expression detected.');
+      return [];
+    }
     return xpath.select(xpathExpression, partnersXMLObj);
   }
 
   private getFormattedXMLOutput(xmlNodes): string {
-    return `${this.XML_HEADER}\n<root>\n${xmlNodes.join('\n')}\n</root>`;
+    // Escape XML special characters to prevent XSS
+    const escapeXml = (unsafe: string) => {
+      return unsafe.replace(/[<>&'"\n]/g, (c) => {
+        switch (c) {
+          case '<': return '&lt;';
+          case '>': return '&gt;';
+          case '&': return '&amp;';
+          case '\'': return '&apos;';
+          case '"': return '&quot;';
+          case '\n': return '&#10;';
+          default: return c;
+        }
+      });
+    };
+
+    const escapedNodes = xmlNodes.map(node => escapeXml(node.toString()));
+    return `${this.XML_HEADER}\n<root>\n${escapedNodes.join('\n')}\n</root>`;
   }
 
   getPartnersProperties(xpathExpression: string): string {
@@ -83,5 +104,11 @@ export class PartnersService {
     }
 
     return this.getFormattedXMLOutput(xmlNodes);
+  }
+
+  private isValidXPath(xpath: string): boolean {
+    // Implement a basic validation for XPath expressions
+    // This is a placeholder for actual validation logic
+    return /^[a-zA-Z0-9\/\[\]\@\=\'\s]+$/.test(xpath);
   }
 }

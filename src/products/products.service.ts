@@ -42,8 +42,17 @@ export class ProductsService {
     );
   }
 
-  async findLatest(limit: number): Promise<Product[]> {
+  async findLatest(limit: number = 3): Promise<Product[]> {
     this.logger.debug(`Find ${limit} latest products`);
+    const maxLimit = 10; // Enforce maximum limit here as well
+    if (isNaN(limit) || limit <= 0) {
+      this.logger.warn(`Invalid limit provided: ${limit}. Defaulting to 3.`);
+      limit = 3;
+    }
+    if (limit > maxLimit) {
+      this.logger.warn(`Requested limit ${limit} exceeds maximum allowed limit of ${maxLimit}. Using max limit.`);
+      limit = maxLimit;
+    }
     return this.productsRepository.find(
       {},
       { limit, orderBy: { createdAt: 'desc' } }
@@ -71,13 +80,16 @@ export class ProductsService {
     }
   }
 
-  async updateProduct(query: string): Promise<void> {
+  async updateProduct(productName: string): Promise<void> {
     try {
-      this.logger.debug(`Updating products table with query "${query}"`);
-      await this.em.getConnection().execute(query);
+      this.logger.debug(`Updating product views for product name "${productName}"`);
+      await this.em.createQueryBuilder(Product)
+        .update({ views_count: () => 'views_count + 1' })
+        .where({ name: productName })
+        .execute();
       return;
     } catch (err) {
-      this.logger.warn(`Failed to execute query. Error: ${err.message}`);
+      this.logger.warn(`Failed to update product views. Error: ${err.message}`);
       throw new InternalServerErrorException(err.message);
     }
   }

@@ -5,7 +5,12 @@ import {
   wrap
 } from '@mikro-orm/core';
 import { InjectRepository } from '@mikro-orm/nestjs';
-import { Injectable, Logger, NotFoundException } from '@nestjs/common';
+import {
+  Injectable,
+  Logger,
+  ForbiddenException,
+  NotFoundException
+} from '@nestjs/common';
 import { PermissionDto } from './api/PermissionDto';
 import { hashPassword } from '../auth/credentials.utils';
 import { User } from '../model/user.entity';
@@ -120,6 +125,25 @@ export class UsersService {
     if (!user) {
       throw new NotFoundException('User not found');
     }
+    return user;
+  }
+
+  async findAuthorizedUserByIdOrDeny(
+    id: number,
+    requesterId: number,
+    isAdmin: boolean
+  ): Promise<User> {
+    this.log.debug(`Called findAuthorizedUserByIdOrDeny ${id}`);
+
+    if (!isAdmin && requesterId !== id) {
+      throw new ForbiddenException();
+    }
+
+    const user = await this.usersRepository.findOne({ id });
+    if (!user) {
+      throw new ForbiddenException();
+    }
+
     return user;
   }
 

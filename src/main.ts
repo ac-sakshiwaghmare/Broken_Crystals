@@ -17,60 +17,196 @@ import fmp from '@fastify/multipart';
 import { randomBytes } from 'crypto';
 import * as http from 'http';
 import * as https from 'https';
-import fastify from 'fastify';
+import fastify, { FastifyRequest, FastifyReply } from 'fastify';
 import { fastifyStatic, ListRender } from '@fastify/static';
-import { join, dirname } from 'path';
+import { join, dirname, basename, posix } from 'path';
 import rawbody from 'raw-body';
 import { Transport, MicroserviceOptions } from '@nestjs/microservices';
+
+const escapeHtml = (value: string) =>
+  value
+    .replace(/&/g, '&amp;')
+    .replace(/</g, '&lt;')
+    .replace(/>/g, '&gt;')
+    .replace(/"/g, '&quot;')
+    .replace(/'/g, '&#39;');
+
+const escapeHtmlAttribute = (value: string) =>
+  escapeHtml(value).replace(/`/g, '&#96;');
+
+const sanitizeHref = (value: string) => {
+  const normalized = posix.normalize(value).replace(/\\/g, '/');
+  if (!normalized.startsWith('/')) {
+    return `/${normalized}`;
+  }
+  return normalized;
+};
 
 const renderDirList: ListRender = (dirs, files) => {
   const currDir = dirname((dirs[0] || files[0]).href);
   const parentDir = dirname(currDir);
+  const safeCurrDir = escapeHtml(currDir);
+  const safeParentDir = escapeHtmlAttribute(sanitizeHref(parentDir));
+
   return `
-    <head><title>Index of ${currDir}/</title></head>
+    <head><title>Index of ${safeCurrDir}/</title></head>
     <html><body>
-      <h1>Index of ${currDir}/</h1>
+      <h1>Index of ${safeCurrDir}/</h1>
       <hr>
       <table style="width: max(450px, 50%);">
         <tr>
           <td>
-            <a href="${parentDir}">../</a>
+            <a href="${safeParentDir}">../</a>
           </td>
           <td></td><td></td>
         </tr>
-        ${dirs.map(
-          (dir) =>
-            `<tr>
+        ${dirs
+          .map((dir) => {
+            const safeHref = escapeHtmlAttribute(sanitizeHref(dir.href));
+            const safeName = escapeHtml(dir.name);
+            const safeCtime = escapeHtml(dir.stats.ctime.toLocaleString());
+            return `<tr>
               <td>
-                <a href="${dir.href}">${dir.name}</a>
+                <a href="${safeHref}">${safeName}</a>
               </td>
               <td>
-                ${dir.stats.ctime.toLocaleString()}
+                ${safeCtime}
               </td>
               <td>
                 -
               </td>
-            </tr>`
-        )}
+            </tr>`;
+          })
+          .join('')}
         <br/>
-        ${files.map(
-          (file) =>
-            `<tr>
+        ${files
+          .map((file) => {
+            const safeHref = escapeHtmlAttribute(sanitizeHref(file.href));
+            const safeName = escapeHtml(file.name);
+            const safeCtime = escapeHtml(file.stats.ctime.toLocaleString());
+            const safeSize = escapeHtml(String(file.stats.size));
+            return `<tr>
               <td>
-                <a href="${file.href}">${file.name}</a>
+                <a href="${safeHref}">${safeName}</a>
               </td>
               <td>
-                ${file.stats.ctime.toLocaleString()}
+                ${safeCtime}
               </td>
               <td>
-                ${file.stats.size}
+                ${safeSize}
               </td>
-            </tr>`
-        )}
+            </tr>`;
+          })
+          .join('')}
       </table>
       <hr>
     </body></html>
   `;
+};
+
+const forbiddenFileNames = new Set([
+  '.env',
+  '.env.local',
+  '.env.development',
+  '.env.production',
+  '.env.test',
+  '.env.development.local',
+  '.env.production.local',
+  '.env.test.local',
+  '.git',
+  '.gitignore',
+  '.gitmodules',
+  '.htaccess',
+  'nginx.conf',
+  'config.js',
+  'secrets',
+  'secret',
+  'credentials',
+  'credential',
+  'token',
+  'tokens'
+]);
+
+const forbiddenPathPatterns = [
+  /(^|\/)(?:\.env(?:\..*)?|config\.js|secrets?(?:\..*)?|credentials?(?:\..*)?|token(?:s)?(?:\..*)?)$/i,
+  /(^|\/)(?:[^/]*\.)?(?:env|ini|cfg|conf)$/i
+];
+
+const decodePathname = (value: string) => {
+  let current = value;
+  for (let i = 0; i < 3; i++) {
+    try {
+      const decoded = decodeURIComponent(current);
+      if (decoded === current) {
+        break;
+      }
+      current = decoded;
+    } catch {
+      break;
+    }
+  }
+  return current;
+};
+
+const isForbiddenRequestPath = (requestUrl: string) => {
+  const rawPath = requestUrl.split('?')[0].split('#')[0] || '/';
+  const decodedPath = decodePathname(rawPath).replace(/\\/g, '/');
+  const normalized = posix.normalize(decodedPath);
+  const segments = normalized.split('/').filter(Boolean);
+
+  if (segments.length === 0) {
+    return false;
+  }
+
+  if (
+    normalized === '/api/secrets' ||
+    normalized.startsWith('/api/secrets/') ||
+    normalized.includes('/api/secrets?')
+  ) {
+    return true;
+  }
+
+  if (segments.some((segment) => segment.startsWith('.'))) {
+    return true;
+  }
+
+  if (segments.some((segment) => forbiddenFileNames.has(segment.toLowerCase()))) {
+    return true;
+  }
+
+  return forbiddenPathPatterns.some((pattern) => pattern.test(normalized));
+};
+
+const denyForbiddenResponse = (reply: FastifyReply) => {
+  reply.code(404);
+  reply.header('cache-control', 'no-store, max-age=0');
+  reply.header('content-type', 'application/json; charset=utf-8');
+  return reply.send({
+    success: false,
+    error: {
+      kind: 'user_input',
+      message: 'Not Found'
+    }
+  });
+};
+
+const denyForbiddenRawResponse = (res: {
+  statusCode: number;
+  setHeader: (name: string, value: string) => void;
+  end: (data?: string) => void;
+}) => {
+  res.statusCode = 404;
+  res.setHeader('Cache-Control', 'no-store, max-age=0');
+  res.setHeader('Content-Type', 'application/json; charset=utf-8');
+  res.end(
+    JSON.stringify({
+      success: false,
+      error: {
+        kind: 'user_input',
+        message: 'Not Found'
+      }
+    })
+  );
 };
 
 async function bootstrap() {
@@ -97,9 +233,53 @@ async function bootstrap() {
         : null
   });
 
+  // Block sensitive paths before routing, static file serving, proxying, or
+  // any plugin can resolve them. This also prevents static fallthrough from
+  // exposing /api/secrets or source-controlled config files.
+  server.server.prependListener('request', (req, res) => {
+    if (req.url && isForbiddenRequestPath(req.url)) {
+      denyForbiddenRawResponse(res);
+    }
+  });
+
+  server.addHook('onRequest', async (req: FastifyRequest, reply: FastifyReply) => {
+    if (req.raw?.url && isForbiddenRequestPath(req.raw.url)) {
+      return denyForbiddenResponse(reply);
+    }
+  });
+
+  server.addHook('preParsing', async (req: FastifyRequest, reply: FastifyReply) => {
+    if (req.raw?.url && isForbiddenRequestPath(req.raw.url)) {
+      return denyForbiddenResponse(reply);
+    }
+  });
+
+  server.addHook('preHandler', async (req: FastifyRequest, reply: FastifyReply) => {
+    if (req.raw?.url && isForbiddenRequestPath(req.raw.url)) {
+      return denyForbiddenResponse(reply);
+    }
+  });
+
   server.setDefaultRoute((req, res) => {
+    if (req.url && isForbiddenRequestPath(req.url)) {
+      res.statusCode = 404;
+      res.setHeader('Cache-Control', 'no-store, max-age=0');
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
+      return res.end(
+        JSON.stringify({
+          success: false,
+          error: {
+            kind: 'user_input',
+            message: 'Not Found'
+          }
+        })
+      );
+    }
+
     if (req.url && req.url.startsWith('/api')) {
       res.statusCode = 404;
+      res.setHeader('Cache-Control', 'no-store, max-age=0');
+      res.setHeader('Content-Type', 'application/json; charset=utf-8');
       return res.end(
         JSON.stringify({
           success: false,
@@ -122,10 +302,31 @@ async function bootstrap() {
         }
         res.statusCode = 200;
         res.setHeader('Content-Type', 'text/html');
+        res.setHeader('Cache-Control', 'no-store, max-age=0');
         res.end(data);
       }
     );
   });
+
+  const staticSecurityHeaders = (
+    res: { statusCode: number; setHeader: (name: string, value: string) => void },
+    filePath: string
+  ) => {
+    const fileName = basename(filePath).toLowerCase();
+    const pathValue = filePath.toLowerCase();
+    if (
+      fileName.startsWith('.') ||
+      forbiddenFileNames.has(fileName) ||
+      fileName.startsWith('.env.') ||
+      pathValue.includes('/.') ||
+      pathValue.includes('\\.') ||
+      forbiddenPathPatterns.some((pattern) => pattern.test(pathValue))
+    ) {
+      res.statusCode = 404;
+      res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store, max-age=0');
+    }
+  };
 
   await server.register(fastifyStatic, {
     root: join(__dirname, '..', 'client', 'dist'),
@@ -133,7 +334,13 @@ async function bootstrap() {
     decorateReply: false,
     redirect: false,
     wildcard: false,
-    serveDotFiles: true
+    index: false,
+    serveDotFiles: false,
+    maxAge: '0',
+    etag: false,
+    setHeaders(res, filePath) {
+      staticSecurityHeaders(res, filePath);
+    }
   });
 
   for (const dir of readdirSync(join(__dirname, '..', 'client', 'vcs'))) {
@@ -147,7 +354,10 @@ async function bootstrap() {
         format: 'html',
         render: renderDirList
       },
-      serveDotFiles: true
+      serveDotFiles: false,
+      setHeaders(res, filePath) {
+        staticSecurityHeaders(res, filePath);
+      }
     });
   }
 
@@ -161,7 +371,10 @@ async function bootstrap() {
       format: 'html',
       render: renderDirList
     },
-    serveDotFiles: true
+    serveDotFiles: false,
+    setHeaders(res, filePath) {
+      staticSecurityHeaders(res, filePath);
+    }
   });
 
   await server.register(fastifyHttpProxy, {

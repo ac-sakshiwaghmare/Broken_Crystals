@@ -13,6 +13,7 @@ import {
   NotFoundException,
   Options,
   Param,
+  ParseIntPipe,
   Post,
   Put,
   Query,
@@ -119,6 +120,8 @@ export class UsersController {
   }
 
   @Get('/id/:id')
+  @UseGuards(AuthGuard)
+  @JwtType(JwtProcessorType.RSA)
   @ApiQuery({ name: 'id', example: 1, required: true })
   @SerializeOptions({ groups: [BASIC_USER_INFO] })
   @ApiOperation({
@@ -127,6 +130,9 @@ export class UsersController {
   @ApiOkResponse({
     type: UserDto,
     description: 'Returns basic user info if it exists'
+  })
+  @ApiForbiddenResponse({
+    description: 'Returns when the authenticated user is not allowed to access this user'
   })
   @ApiNotFoundResponse({
     description: 'User not found',
@@ -138,12 +144,35 @@ export class UsersController {
       }
     }
   })
-  async getById(@Param('id') id: number): Promise<UserDto> {
+  async getById(
+    @Param('id', ParseIntPipe) id: number,
+    @Req() req: FastifyRequest
+  ): Promise<UserDto> {
     try {
       this.logger.debug(`Find a user by id: ${id}`);
-      return new UserDto(await this.usersService.findById(id));
+      const requesterEmail = this.originEmail(req);
+      const requester = await this.usersService.findByEmail(requesterEmail);
+
+      return new UserDto(
+        await this.usersService.findAuthorizedUserByIdOrDeny(
+          id,
+          requester.id,
+          requester.isAdmin
+        )
+      );
     } catch (err) {
-      throw new HttpException(err.message, err.status);
+      if (err instanceof ForbiddenException) {
+        throw new ForbiddenException();
+      }
+
+      if (err instanceof NotFoundException) {
+        throw new ForbiddenException();
+      }
+
+      throw new HttpException(
+        err.message || 'Internal server error',
+        err.status || HttpStatus.INTERNAL_SERVER_ERROR
+      );
     }
   }
 
@@ -258,7 +287,7 @@ export class UsersController {
     description: 'Returns when isAdmin is false'
   })
   async deleteUserPhotoById(
-    @Param('id') id: number,
+    @Param('id', ParseIntPipe) id: number,
     @Query('isAdmin') isAdminParam: string
   ) {
     isAdminParam = isAdminParam.toLowerCase();

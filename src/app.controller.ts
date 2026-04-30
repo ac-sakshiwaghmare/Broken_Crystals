@@ -19,7 +19,8 @@ import {
   UseInterceptors,
   ParseIntPipe,
   DefaultValuePipe,
-  HttpStatus
+  HttpStatus,
+  GoneException
 } from '@nestjs/common';
 import { GrpcMethod } from '@nestjs/microservices';
 import {
@@ -34,12 +35,9 @@ import {
   ApiQuery,
   ApiTags
 } from '@nestjs/swagger';
-import * as dotT from 'dot';
 import { FastifyReply } from 'fastify';
 import { parseXml } from 'libxmljs';
-import { AppConfig } from './app.config.api';
 import {
-  API_DESC_CONFIG_SERVER,
   API_DESC_LAUNCH_COMMAND,
   API_DESC_OPTIONS_REQUEST,
   API_DESC_REDIRECT_REQUEST,
@@ -51,7 +49,7 @@ import {
 } from './app.controller.swagger.desc';
 import { AuthGuard } from './auth/auth.guard';
 import { JwtType } from './auth/jwt/jwt.type.decorator';
-import { JwtProcessorType } from './auth/auth.service';
+import { JwtProcessorType } from './auth/jwt/jwt.type.decorator';
 import { AppService } from './app.service';
 import { BASIC_USER_INFO, UserDto } from './users/api/UserDto';
 import { SWAGGER_DESC_FIND_USER } from './users/users.controller.swagger.desc';
@@ -76,10 +74,12 @@ export class AppController {
   async renderTemplate(@Body() raw): Promise<string> {
     if (typeof raw === 'string' || Buffer.isBuffer(raw)) {
       const text = raw.toString().trim();
-      const res = dotT.compile(text)();
-      this.logger.debug(`Rendered template: ${res}`);
-      return res;
+
+      this.logger.debug(`Rendered template: ${text}`);
+      return text;
     }
+
+    return '';
   }
 
   @Get('goto')
@@ -210,7 +210,6 @@ export class AppController {
         ? payload.processing_expression
         : 'numbers.reduce((acc, num) => acc + num, 0)';
 
-    // expose both names used by exploiter payloads
     const response = res;
 
     this.logger.debug(`Processing crystals with ${numbers.length} values`);
@@ -218,7 +217,6 @@ export class AppController {
     try {
       const result = eval(processNumbersExpression);
 
-      // SSJI payload may already end the response
       if (response.sent || response.raw.writableEnded) {
         return;
       }
@@ -253,14 +251,13 @@ export class AppController {
 
   @Get('/config')
   @ApiOperation({
-    description: API_DESC_CONFIG_SERVER
+    description: 'Deprecated endpoint removed to prevent exposure of sensitive configuration.'
   })
   @ApiOkResponse({
-    type: AppConfig
+    type: Object
   })
-  getConfig(): AppConfig {
-    const config = this.appService.getConfig();
-    return config;
+  getConfig(): never {
+    throw new GoneException('This endpoint is no longer available.');
   }
 
   @Get('/secrets')
@@ -271,27 +268,10 @@ export class AppController {
     type: Object
   })
   getSecrets(): Record<string, string> {
-    const secrets = {
-      codeclimate:
-        'CODECLIMATE_REPO_TOKEN=62864c476ade6ab9d10d0ce0901ae2c211924852a28c5f960ae5165c1fdfec73',
-      facebook:
-        'EAACEdEose0cBAHyDF5HI5o2auPWv3lPP3zNYuWWpjMrSaIhtSvX73lsLOcas5k8GhC5HgOXnbF3rXRTczOpsbNb54CQL8LcQEMhZAWAJzI0AzmL23hZByFAia5avB6Q4Xv4u2QVoAdH0mcJhYTFRpyJKIAyDKUEBzz0GgZDZD',
-      google_b64: 'QUl6YhT6QXlEQnbTr2dSdEI1W7yL2mFCX3c4PPP5NlpkWE65NkZV',
-      google_oauth:
-        '188968487735-c7hh7k87juef6vv84697sinju2bet7gn.apps.googleusercontent.com',
-      google_oauth_token:
-        'ya29.a0TgU6SMDItdQQ9J7j3FVgJuByTTevl0FThTEkBs4pA4-9tFREyf2cfcL-_JU6Trg1O0NWwQKie4uGTrs35kmKlxohWgcAl8cg9DTxRx-UXFS-S1VYPLVtQLGYyNTfGp054Ad3ej73-FIHz3RZY43lcKSorbZEY4BI',
-      heroku:
-        'herokudev.staging.endosome.975138 pid=48751 request_id=0e9a8698-a4d2-4925-a1a5-113234af5f60',
-      hockey_app: 'HockeySDK: 203d3af93f4a218bfb528de08ae5d30ff65e1cf',
-      outlook:
-        'https://outlook.office.com/webhook/7dd49fc6-1975-443d-806c-08ebe8f81146@a532313f-11ec-43a2-9a7a-d2e27f4f3478/IncomingWebhook/8436f62b50ab41b3b93ba1c0a50a0b88/eff4cd58-1bb8-4899-94de-795f656b4a18',
-      paypal:
-        'access_token$production$x0lb4r69dvmmnufd$3ea7cb281754b7da7dac131ef5783321',
-      slack:
-        'xoxo-175588824543-175748345725-176608801663-826315f84e553d482bb7e73e8322sdf3'
+    return {
+      status: 'redacted',
+      message: 'Secret values are not exposed by this endpoint.'
     };
-    return secrets;
   }
 
   @Get('/v1/userinfo/:email')
